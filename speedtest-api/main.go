@@ -3,14 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+
 	//"html/template"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/gorilla/mux"
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/mysql"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 type App struct {
@@ -22,9 +23,9 @@ type App struct {
 type speedResult struct {
 	ID            int64  `gorm:"column:id"`
 	TimeStamp     string `gorm:"column:TimeStamp"`
-	DownloadSpeed uint64 `gorm:"column:DownloadSpeed"`
-	UploadSpeed   int64  `gorm:"column:UploadSpeed"`
-	Latency       int64  `gorm:"column:Latency"`
+	DownloadSpeed string `gorm:"column:DownloadSpeed"`
+	UploadSpeed   string `gorm:"column:UploadSpeed"`
+	Latency       string `gorm:"column:Latency"`
 	PublicIp      string `gorm:"column:PublicIp"`
 	ISP           string `gorm:"column:ISP"`
 	Peers         string `gorm:"column:Peers"`
@@ -52,7 +53,7 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 func (a *App) Initialize(user, password, dbname, host string) {
 	connectionString := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local", user, password, host, dbname)
 	var err error
-	a.DB, err = gorm.Open("mysql", connectionString)
+	a.DB, err = gorm.Open(mysql.Open(connectionString), &gorm.Config{})
 	if err != nil {
 		panic(err.Error())
 	}
@@ -60,14 +61,15 @@ func (a *App) Initialize(user, password, dbname, host string) {
 }
 
 func (a *App) Run(addr string) {
-   log.Fatal(http.ListenAndServe(":" + addr, a.Router))
+	log.Fatal(http.ListenAndServe(":"+addr, a.Router))
 }
 
 func getResults(db *gorm.DB) []speedResult {
 	var speedtest []speedResult
 
 	if err := db.Find(&speedtest).Error; err != nil {
-		log.Fatal(err)
+		log.Printf("Error querying results: %v", err)
+		return speedtest
 	}
 	log.Printf("%d rows found.", len(speedtest))
 	return speedtest
@@ -75,25 +77,12 @@ func getResults(db *gorm.DB) []speedResult {
 
 func (a *App) getResults(w http.ResponseWriter, r *http.Request) {
 	results := getResults(a.DB)
-   if len(results) < 1 {
-      fmt.Println("No results found")
-   }
+	if len(results) < 1 {
+		fmt.Println("No results found")
+	}
 
 	respondWithJSON(w, http.StatusOK, results)
 }
-
-
-// TODO
-
-//func (a *App) indexFile(w http.ResponseWriter, r *http.Request) {
-//	results := getResults(a.DB)
-//	fmt.Println(results[0])
-//	fmt.Printf("t1 : %T\n", results[0])
-//	a.tmpl.ExecuteTemplate(w, "index.html", results)
-//}
-
-//func (a *App) InitializeRoutes() {
-//}
 
 func main() {
 	a := App{}
@@ -103,16 +92,8 @@ func main() {
 		os.Getenv("MYSQL_DATABASE"),
 		os.Getenv("MYSQL_HOST"),
 	)
-   
+
 	a.Router = mux.NewRouter()
 	a.Router.HandleFunc("/", a.getResults).Methods("GET")
-   a.Run(os.Getenv("HOST_PORT"))
-
-   // TODO create good index file and show static content
-	// a.tmpl = template.Must(template.ParseGlob("templates/*.html"))
-	//a.Router.PathPrefix("/").Handler(http.FileServer(http.Dir("./templates/")))
-	// a.Router.HandleFunc("/", a.indexFile).Methods("GET")
-//	fs := http.FileServer(http.Dir("./static/"))
-//	a.Router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fs))
-//	http.Handle("/", a.Router)
+	a.Run(os.Getenv("HOST_PORT"))
 }

@@ -1,1 +1,1 @@
-*/2 * * * * /usr/local/bin/app /usr/src/app/speedtest-go --json &> /var/log/script.log
+*/2 * * * * /usr/local/bin/app /usr/src/app/speedtest-go --format=json --accept-license --accept-gdpr >> /var/log/script.log 2>&1

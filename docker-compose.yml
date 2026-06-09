@@ -1,34 +1,4 @@
-version: "2"
-services: 
-    speedtest-app:
-      build:
-        context: speedtest-go-image/ 
-      links:
-         - speedtest-db
-      volumes:
-         - /etc/localtime:/etc/localtime:ro
-      environment:
-        MYSQL_DATABASE: ${MYSQL_DATABASE}
-        MYSQL_USER: ${MYSQL_USER}
-        MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-        MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-        MYSQL_HOST: ${MYSQL_HOST}
-        MYSQL_PORT: ${MYSQL_PORT}
-    speedtest-webui:
-      build:
-        context: webframe
-      links:
-         - speedtest-db
-         - speedtest-app
-      ports:
-        - "8010:8010"
-      environment:
-        MYSQL_DATABASE: ${MYSQL_DATABASE}
-        MYSQL_USER: ${MYSQL_USER}
-        MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-        MYSQL_HOST: ${MYSQL_HOST}
-        MYSQL_PORT: ${MYSQL_PORT}
-        HOST_PORT: ${HOST_PORT}
+  services: 
     speedtest-db:
       image: mariadb:10.3
       container_name: speedtest-db
@@ -42,3 +12,41 @@ services:
       volumes:
         - ./db:/docker-entrypoint-initdb.d/:ro 
         - /etc/localtime:/etc/localtime:ro
+      healthcheck: 
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+    speedtest-app:
+      build:
+        context: speedtest-go-image/ 
+      depends_on:
+        speedtest-db:
+          condition: service_healthy
+      volumes:
+         - /etc/localtime:/etc/localtime:ro
+      environment:
+        MYSQL_DATABASE: ${MYSQL_DATABASE}
+        MYSQL_USER: ${MYSQL_USER}
+        MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+        MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+        MYSQL_HOST: ${MYSQL_HOST}
+        MYSQL_PORT: ${MYSQL_PORT}
+
+    speedtest-api:
+      build:
+        context: speedtest-api
+      depends_on:
+        speedtest-db:
+          condition: service_healthy
+      ports:
+        - "8010:8010"
+      environment:
+        MYSQL_DATABASE: ${MYSQL_DATABASE}
+        MYSQL_USER: ${MYSQL_USER}
+        MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+        MYSQL_HOST: ${MYSQL_HOST}
+        MYSQL_PORT: ${MYSQL_PORT}
+        HOST_PORT: ${HOST_PORT}
+    

@@ -1,34 +1,48 @@
-# Context:
+# speedtest-golang
 
-   Application to run speedtest inside docker containers. Exposes matrix as json on port 8010
+Application to run automated internet speed tests inside Docker containers and expose results as a JSON API.
+Runs a speed test every 2 minutes using the official Ookla Speedtest CLI, stores results in MariaDB, and exposes them via a REST API.
 
-   By default it runs every 2 minutes
+# Architecture
+
+Three containers:
+
+- speedtest-db — MariaDB database storing all speed test results
+- speedtest-collector — Go app running the Ookla speedtest CLI on a cron schedule and writing results to the DB
+- speedtest-api — Go REST API reading from the DB and exposing results as JSON on port 8010
+
+# Requirements
+
+- Docker
+- Docker Compose
 
 # Deployment:
 
-   Deploys three containers:
+```
+git clone https://github.com/rajeshkio/speedtest-golang.git
+cd speedtest-golang
+docker-compose up -d --build
+```
 
-   1 - MySQL as DB
+# Usage
 
-   2 - Golang app which runs the cron and inserts results into the db.
+Access speed test results:
 
-   3 - WebUI which exposes the matrics from the DB and runs on port 8010.
+```
+curl http://127.0.0.1:8010
+```
 
-# Steps:
+Example response:
 
-Make sure docker and docker-compose is installed on your machine.
+```
+[{"ID":1,"TimeStamp":"2026-06-09T12:30:21Z","DownloadSpeed":"99","UploadSpeed":"98","Latency":"5.241","PublicIp":"157.20.184.37","ISP":"Vortex Infoway Private","Peers":"Pune Gazon Communications India Ltd India"}]
+```
 
-1- Clone the repo
-      
-      git clone https://github.com/rk280392/speedtest-golang.git
-      
-2 - Deploy this with docker-compose.
+# Docker Hub
 
-     docker-compose up -d --build
+Pre-built images available for linux/amd64 and linux/arm64:
 
-3 - Access the results in json through rest api by hitting endpoint 127.0.0.1:8010
-
-# Screenshot
-
-![Screenshot](https://user-images.githubusercontent.com/43488291/190160689-f415cc90-d20c-490e-b677-a557989f4884.png)
-
+```
+docker pull rk90229/speedtest-collector:v1.0.0
+docker pull rk90229/speedtest-api:v1.0.0
+```

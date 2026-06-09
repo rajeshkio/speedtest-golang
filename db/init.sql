@@ -14,5 +14,5 @@ CREATE TABLE if not exists `speedtest` (
   `ISP` varchar(250) DEFAULT NULL,
   `Peers` varchar(250) DEFAULT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=96 DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4;
 
