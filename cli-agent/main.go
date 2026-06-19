@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 const url = "http://192.168.90.100:11434/api/chat"
@@ -110,116 +111,115 @@ func main() {
 		fmt.Printf("failed to write to stdin in mcp notification: %v", err)
 	}
 
-	fmt.Printf("Ask: ")
-	userInputReader := bufio.NewReader(os.Stdin)
-	input, _ := userInputReader.ReadString('\n')
-	// Talk to Ollama, get a reply
-	chatRequest := ChatRequest{
-		Model: "qwen2.5:14b",
-		Messages: []Message{
-			Message{Role: "system", Content: "You are a data extraction assistant. Return ONLY the exact fields requested. Format each record as: Timestamp | Download Speed Mbps. One record per line. No ID, no JSON, no arrays, no analysis, no headers, no extra commentary."},
-			Message{Role: "user", Content: input},
-		},
-		Stream: false,
-		Think:  false,
-		Options: map[string]interface{}{
-			"num_ctx": 16384,
-		},
-		// Send tool definitions, Ollama decides to call a tool
-		Tools: []Tool{Tool{
-			Type: "function",
-			Function: Function{
-				Name:        "getSlowSpeedResults",
-				Description: "Returns periods where download speed was below a threshold",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"speedthreshold": map[string]interface{}{
-							"type":        "number",
-							"description": "Download speed threshold in Mbps",
+	for {
+		fmt.Printf("Ask: ")
+
+		userInputReader := bufio.NewReader(os.Stdin)
+		input, _ := userInputReader.ReadString('\n')
+		if strings.TrimSpace(input) == "exit" {
+			break
+		}
+		// Talk to Ollama, get a reply
+		chatRequest := ChatRequest{
+			Model: "qwen2.5:14b",
+			Messages: []Message{
+				Message{Role: "system", Content: "You are a data extraction assistant. Return ONLY the exact fields requested. Format each record as: Timestamp | Download Speed Mbps. One record per line. No ID, no JSON, no arrays, no analysis, no headers, no extra commentary."},
+				Message{Role: "user", Content: input},
+			},
+			Stream: false,
+			Think:  false,
+			Options: map[string]interface{}{
+				"num_ctx": 16384,
+			},
+			// Send tool definitions, Ollama decides to call a tool
+			Tools: []Tool{Tool{
+				Type: "function",
+				Function: Function{
+					Name:        "getSlowSpeedResults",
+					Description: "Returns periods where download speed was below a threshold",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"speedthreshold": map[string]interface{}{
+								"type":        "number",
+								"description": "Download speed threshold in Mbps",
+							},
 						},
+						"required": []string{"speedthreshold"},
 					},
-					"required": []string{"speedthreshold"},
 				},
 			},
-		},
-		},
-	}
+			},
+		}
 
-	chatRequestByte, err := json.Marshal(chatRequest)
-	if err != nil {
-		log.Printf("failed to marshal the chatRequest: %v", err)
-	}
+		chatRequestByte, err := json.Marshal(chatRequest)
+		if err != nil {
+			log.Printf("failed to marshal the chatRequest: %v", err)
+		}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(chatRequestByte))
-	if err != nil {
-		log.Printf("failed to create request: %v", err)
-	}
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(chatRequestByte))
+		if err != nil {
+			log.Printf("failed to create request: %v", err)
+		}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Printf("failed to do the request")
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("failed to read the response: %v", err)
-	}
-	var chatResponse ChatResponse
-	err = json.Unmarshal(body, &chatResponse)
-	if err != nil {
-		fmt.Printf("failed to unmarshall the response body: %v", err)
-	}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			fmt.Printf("failed to do the request")
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Printf("failed to read the response: %v", err)
+		}
+		resp.Body.Close()
+		var chatResponse ChatResponse
+		err = json.Unmarshal(body, &chatResponse)
+		if err != nil {
+			fmt.Printf("failed to unmarshall the response body: %v", err)
+		}
 
-	// Detect tool call vs plain text answer
-	if len(chatResponse.Messages.ToolCall) > 0 {
-		for _, tool := range chatResponse.Messages.ToolCall {
-			toolByte, err := json.Marshal(tool.Function.Arguments)
-			if err != nil {
-				fmt.Printf("failed to marshal function argument")
+		// Detect tool call vs plain text answer
+		if len(chatResponse.Messages.ToolCall) > 0 {
+			for _, tool := range chatResponse.Messages.ToolCall {
+				toolByte, err := json.Marshal(tool.Function.Arguments)
+				if err != nil {
+					fmt.Printf("failed to marshal function argument")
+				}
+				MCPRequest := MCPToolCall{
+					JSONRPC: "2.0",
+					ID:      3,
+					Method:  "tools/call",
+					Params: MCPToolParams{
+						Name:      tool.Function.Name,
+						Arguments: json.RawMessage(toolByte),
+					},
+				}
+
+				MCPRequestByte, _ := json.Marshal(MCPRequest)
+				fmt.Fprintf(stdin, "%s\n", string(MCPRequestByte))
+				line, _ := mcpReader.ReadString('\n')
+
+				var mcpResponse MCPResponse
+				err = json.Unmarshal([]byte(line), &mcpResponse)
+				if err != nil {
+					fmt.Printf("failed to unmarshal mcpresponse: %v", err)
+				}
+
+				text := mcpResponse.Result.Content[0].Text
+				var toolOutput ToolOutput
+				err = json.Unmarshal([]byte(text), &toolOutput)
+				if err != nil {
+					fmt.Printf("failed to unmarshal mcpresponse content: %v", err)
+				}
+
+				var speedTestResult []SpeedTestResult
+				json.Unmarshal([]byte(toolOutput.ResultOutput), &speedTestResult)
+
+				for _, result := range speedTestResult {
+					fmt.Printf("%s - %s Mbps \n", result.TimeStamp, result.DownloadSpeed)
+				}
 			}
-			MCPRequest := MCPToolCall{
-				JSONRPC: "2.0",
-				ID:      3,
-				Method:  "tools/call",
-				Params: MCPToolParams{
-					Name:      tool.Function.Name,
-					Arguments: json.RawMessage(toolByte),
-				},
-			}
-
-			MCPRequestByte, _ := json.Marshal(MCPRequest)
-			fmt.Fprintf(stdin, "%s\n", string(MCPRequestByte))
-			line, _ := mcpReader.ReadString('\n')
-
-			//fmt.Printf("Ollama called for a tool: %v %v", tool.Function.Name, tool.Function.Arguments)
-			// Append a new Message{Role: "tool", Content: line} to the messages slice
-			chatRequest.Messages = append(chatRequest.Messages, Message{Role: "tool", Content: line})
-			chatRequestByte, _ := json.Marshal(chatRequest)
-
-			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(chatRequestByte))
-			if err != nil {
-				log.Printf("failed to create request: %v", err)
-			}
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				fmt.Printf("failed to do the request")
-			}
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				fmt.Printf("failed to read the response: %v", err)
-			}
-			resp.Body.Close()
-			var chatResponse ChatResponse
-			err = json.Unmarshal(body, &chatResponse)
-			if err != nil {
-				fmt.Printf("failed to unmarshall the response body: %v", err)
-			}
+		} else {
 			fmt.Println(chatResponse.Messages.Content)
 		}
-	} else {
-		fmt.Println(chatResponse.Messages.Content)
 	}
 }
