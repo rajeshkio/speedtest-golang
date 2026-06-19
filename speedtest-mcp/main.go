@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,13 +21,18 @@ type GetSlowPeriodsInput struct {
 }
 
 type GetSlowPeriodsOutput struct {
-	ResultOutput string `json:"resultoutput"`
+	Results string `json:"results"`
 }
 
 type GetAllResultsInput struct {
 }
 type GetAllResultsOutput struct {
 	Results string `json:"results" jsonschema:"the complete result to show to the user"`
+}
+type GetSlowestPeriodInput struct {
+}
+type GetSLowestPeriodOutput struct {
+	Results string `json:"results"`
 }
 type SpeedTestResult struct {
 	ID            int64     `json:"ID"`
@@ -91,9 +97,36 @@ func getSlowSpeedPeriods(ctx context.Context, req *mcp.CallToolRequest, input Ge
 		return nil, GetSlowPeriodsOutput{}, fmt.Errorf("failed to marshal: %w", err)
 	}
 	return nil, GetSlowPeriodsOutput{
-		ResultOutput: string(jsonSpeedResult),
+		Results: string(jsonSpeedResult),
 	}, nil
+}
 
+func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSlowestPeriodInput) (*mcp.CallToolResult, GetSLowestPeriodOutput, error) {
+	results, err := fetchAllResults(url)
+	if err != nil {
+		return nil, GetSLowestPeriodOutput{}, err
+	}
+
+	var slowestResult SpeedTestResult
+	slowestSpeedResult := math.MaxFloat64
+	for _, result := range results {
+		speed, err := strconv.ParseFloat(result.DownloadSpeed, 64)
+		if err != nil {
+			continue
+		}
+		if speed < slowestSpeedResult {
+			slowestSpeedResult = speed
+			slowestResult = result
+		}
+	}
+
+	jsonResult, err := json.Marshal([]SpeedTestResult{slowestResult})
+	if err != nil {
+		return nil, GetSLowestPeriodOutput{}, err
+	}
+	return nil, GetSLowestPeriodOutput{
+		Results: string(jsonResult),
+	}, nil
 }
 
 func main() {
@@ -101,8 +134,19 @@ func main() {
 	log.Println("calling from main")
 	server := mcp.NewServer(&mcp.Implementation{Name: "greeter", Version: "v1.0.0"}, nil)
 	log.Println("before calling the mcp.addtool")
-	mcp.AddTool(server, &mcp.Tool{Name: "getAllResults", Description: "returns all the speedtest run"}, getAllResults)
-	mcp.AddTool(server, &mcp.Tool{Name: "getSlowSpeedResults", Description: "returns slow speedtest run"}, getSlowSpeedPeriods)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "getAllResults",
+		Description: "Returns all speedtest results including timestamp, download speed, upload speed, latency, ISP and peer. Use this when the user asks for averages, trends, comparisons, best/worst periods, or any question that requires analyzing the full dataset.",
+	}, getAllResults)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "getSlowSpeedResults",
+		Description: "Returns only speedtest results where download speed is below a given threshold in Mbps. Use this when the user asks for slow periods, bad speeds, or speeds below a specific value. Requires speedthreshold parameter.",
+	}, getSlowSpeedPeriods)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "getSlowestPeriod",
+		Description: "Returns the single speedtest result with the lowest download speed ever recorded. Use this when the user asks for the worst period, slowest connection, minimum download speed, or when the internet was slowest. Returns one record with timestamp and speed.",
+	}, getSlowestPeriod)
+
 	// Run the server over stdin/stdout, until the client disconnects.
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

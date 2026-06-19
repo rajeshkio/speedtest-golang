@@ -83,7 +83,7 @@ type SpeedTestResult struct {
 }
 
 type ToolOutput struct {
-	ResultOutput string `json:"resultoutput"`
+	Results string `json:"results"`
 }
 
 func main() {
@@ -149,6 +149,29 @@ func main() {
 					},
 				},
 			},
+				{
+					Type: "function",
+					Function: Function{
+						Name:        "getAllResults",
+						Description: "Resturns all the results for further processing",
+						Parameters: map[string]interface{}{
+							"type":       "object",
+							"properties": map[string]interface{}{},
+						},
+					},
+				},
+
+				{
+					Type: "function",
+					Function: Function{
+						Name:        "getSlowestPeriod",
+						Description: "Returns the single speedtest result with the lowest download speed ever recorded. Use this when the user asks for the worst period, slowest connection, minimum download speed, or when the internet was slowest. Returns one record with timestamp and speed.",
+						Parameters: map[string]interface{}{
+							"type":       "object",
+							"properties": map[string]interface{}{},
+						},
+					},
+				},
 			},
 		}
 
@@ -173,6 +196,7 @@ func main() {
 		resp.Body.Close()
 		var chatResponse ChatResponse
 		err = json.Unmarshal(body, &chatResponse)
+		fmt.Println(string(body))
 		if err != nil {
 			fmt.Printf("failed to unmarshall the response body: %v", err)
 		}
@@ -212,7 +236,7 @@ func main() {
 				}
 
 				var speedTestResult []SpeedTestResult
-				json.Unmarshal([]byte(toolOutput.ResultOutput), &speedTestResult)
+				json.Unmarshal([]byte(toolOutput.Results), &speedTestResult)
 
 				for _, result := range speedTestResult {
 					fmt.Printf("%s - %s Mbps \n", result.TimeStamp, result.DownloadSpeed)
