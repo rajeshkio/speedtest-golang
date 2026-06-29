@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,11 +30,30 @@ type GetAllResultsInput struct {
 type GetAllResultsOutput struct {
 	Results string `json:"results" jsonschema:"the complete result to show to the user"`
 }
+
+// no input needed — always returns the single slowest
 type GetSlowestPeriodInput struct {
 }
-type GetSLowestPeriodOutput struct {
+type GetSlowestPeriodOutput struct {
 	Results string `json:"results"`
 }
+
+// needs date input — user specifies which date
+type GetResultByDateInput struct {
+	Date string `json:"date"`
+}
+type GetResultByDateOutput struct {
+	Results string `json:"results"`
+}
+
+type GetResultsByDurationInput struct {
+	Duration string `json:"duration"`
+}
+
+type GetResultsByDurationOutput struct {
+	Results []SpeedTestResult `json:"results"`
+}
+
 type SpeedTestResult struct {
 	ID            int64     `json:"ID"`
 	TimeStamp     time.Time `json:"TimeStamp"`
@@ -101,10 +121,10 @@ func getSlowSpeedPeriods(ctx context.Context, req *mcp.CallToolRequest, input Ge
 	}, nil
 }
 
-func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSlowestPeriodInput) (*mcp.CallToolResult, GetSLowestPeriodOutput, error) {
+func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSlowestPeriodInput) (*mcp.CallToolResult, GetSlowestPeriodOutput, error) {
 	results, err := fetchAllResults(url)
 	if err != nil {
-		return nil, GetSLowestPeriodOutput{}, err
+		return nil, GetSlowestPeriodOutput{}, err
 	}
 
 	var slowestResult SpeedTestResult
@@ -122,17 +142,94 @@ func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSl
 
 	jsonResult, err := json.Marshal([]SpeedTestResult{slowestResult})
 	if err != nil {
-		return nil, GetSLowestPeriodOutput{}, err
+		return nil, GetSlowestPeriodOutput{}, err
 	}
-	return nil, GetSLowestPeriodOutput{
+	return nil, GetSlowestPeriodOutput{
 		Results: string(jsonResult),
+	}, nil
+}
+
+func getResultsByDate(ctx context.Context, req *mcp.CallToolRequest, input GetResultByDateInput) (*mcp.CallToolResult, GetResultByDateOutput, error) {
+	results, err := fetchAllResults(url)
+	if err != nil {
+		return nil, GetResultByDateOutput{}, err
+	}
+
+	var resultsByDate []SpeedTestResult
+	for _, result := range results {
+		if result.TimeStamp.Format("2006-01-02") == input.Date {
+			resultsByDate = append(resultsByDate, result)
+		}
+	}
+
+	jsonResultByDate, err := json.Marshal(resultsByDate)
+	if err != nil {
+		return nil, GetResultByDateOutput{}, fmt.Errorf("failed to marshal: %w", err)
+	}
+
+	return nil, GetResultByDateOutput{
+		Results: string(jsonResultByDate),
+	}, nil
+
+}
+
+func parseDuration(s string) (time.Duration, error) {
+
+	if strings.HasSuffix(s, "d") {
+		numStr := strings.TrimSuffix(s, "d")
+		num, err := strconv.Atoi(numStr)
+		if err != nil {
+			log.Printf("failed to convert duration: %v", s)
+			return 0, err
+		}
+		return time.Duration(num) * 24 * time.Hour, nil
+	}
+
+	if strings.HasSuffix(s, "w") {
+		numStr := strings.TrimSuffix(s, "w")
+		num, err := strconv.Atoi(numStr)
+		if err != nil {
+			log.Printf("failed to convert duration: %v", s)
+			return 0, err
+		}
+		return time.Duration(num) * 7 * 24 * time.Hour, nil
+	}
+
+	duration, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	return duration, nil
+
+}
+
+func getResultsByDuration(ctx context.Context, req *mcp.CallToolRequest, input GetResultsByDurationInput) (*mcp.CallToolResult, GetResultsByDurationOutput, error) {
+	results, err := fetchAllResults(url)
+	if err != nil {
+		return nil, GetResultsByDurationOutput{}, err
+	}
+
+	duration, err := parseDuration(input.Duration)
+	if err != nil {
+		return nil, GetResultsByDurationOutput{}, err
+	}
+	cutoff := time.Now().UTC().Add(-duration)
+	filteredResults := []SpeedTestResult{}
+	for _, result := range results {
+		if result.TimeStamp.After(cutoff) || result.TimeStamp.Equal(cutoff) {
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	return nil, GetResultsByDurationOutput{
+		Results: filteredResults,
 	}, nil
 }
 
 func main() {
 	// Create a server with a single tool.
 	log.Println("calling from main")
-	server := mcp.NewServer(&mcp.Implementation{Name: "greeter", Version: "v1.0.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "greeter", Version: "1.0.0"}, nil)
 	log.Println("before calling the mcp.addtool")
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "getAllResults",
@@ -146,9 +243,23 @@ func main() {
 		Name:        "getSlowestPeriod",
 		Description: "Returns the single speedtest result with the lowest download speed ever recorded. Use this when the user asks for the worst period, slowest connection, minimum download speed, or when the internet was slowest. Returns one record with timestamp and speed.",
 	}, getSlowestPeriod)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "getResultsByDate",
+		Description: "Returns all speedtest results for a specific date. Use this when the user asks for results on a specific day, today's results, or yesterday's results. Requires date parameter in YYYY-MM-DD format.",
+	}, getResultsByDate)
 
-	// Run the server over stdin/stdout, until the client disconnects.
-	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
-		log.Fatal(err)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "getResultsByDuration",
+		Description: "Returns speedtest results from the last N duration. Use when the user asks about recent results, current performance, or what happened in the last Xa hours/days. Accepts duration in formats: 30m, 2h, 1d, 2d, 1w. Requires duration parameter.",
+	}, getResultsByDuration)
+
+	// Create the streamable HTTP handler.
+	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil)
+
+	// Start the HTTP server.
+	if err := http.ListenAndServe("0.0.0.0:8020", handler); err != nil {
+		log.Fatalf("Server failed: %v", err)
 	}
 }

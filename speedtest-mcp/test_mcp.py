@@ -29,15 +29,21 @@ proc.stdin.flush()
 resp = send({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
 print("tools/list:", resp)
 
-resp = send({"jsonrpc":"2.0","id":3,"method":"tools/call","params": {
-    "name" : "getAllResults",
-    "arguments": {}
-}})
-print("getAllResults:", resp)
-resp = send({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
-    "name": "getSlowSpeedResults",
-    "arguments": {"speedthreshold": 90}
-}})
-print("tools/call:", resp)
+# resp = send({"jsonrpc":"2.0","id":3,"method":"tools/call","params": {
+#     "name" : "getAllResults",
+#     "arguments": {}
+# }})
+# print("getAllResults:", resp)
+# resp = send({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+#     "name": "getSlowSpeedResults",
+#     "arguments": {"speedthreshold": 90}
+# }})
+# print("tools/call:", resp)
+
+resp = send({"jsonrpc":"2.0", "id":4, "method":"tools/call","params":{
+    "name": "getResultsByDuration",
+    "arguments": {"duration" : "60m"}
+    }})
+print("getResultsByDuration:", resp)
 
 proc.stdin.close()
