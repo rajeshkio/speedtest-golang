@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +16,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const url = "http://127.0.0.1:8010"
+var url = getenv("SPEEDTEST_API_URL", "http://127.0.0.1:8010")
+
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 type GetSlowPeriodsInput struct {
 	SpeedThreshold float64 `json:"speedthreshold"`
@@ -65,12 +73,17 @@ type SpeedTestResult struct {
 	Peers         string    `json:"Peers"`
 }
 
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 func fetchAllResults(url string) ([]SpeedTestResult, error) {
-	resp, err := http.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return []SpeedTestResult{}, fmt.Errorf("http call failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return []SpeedTestResult{}, fmt.Errorf("api returned status %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return []SpeedTestResult{}, fmt.Errorf("failed to read the response body: %w", err)
@@ -101,14 +114,14 @@ func getSlowSpeedPeriods(ctx context.Context, req *mcp.CallToolRequest, input Ge
 	if err != nil {
 		return nil, GetSlowPeriodsOutput{}, err
 	}
-	var slowSpeedResults []SpeedTestResult
-	for i, result := range results {
-		downloadSpeedFloat, err := strconv.ParseFloat(result.DownloadSpeed, 64)
+	slowSpeedResults := []SpeedTestResult{}
+	for _, result := range results {
+		slow, err := isSlow(result.DownloadSpeed, input.SpeedThreshold)
 		if err != nil {
-			log.Printf("invalid download speed: %v", err)
+			log.Printf("skipping row %d: invalid download speed: %v", result.ID, err)
 		}
-		if downloadSpeedFloat <= input.SpeedThreshold {
-			slowSpeedResults = append(slowSpeedResults, results[i])
+		if slow {
+			slowSpeedResults = append(slowSpeedResults, result)
 		}
 	}
 
@@ -119,6 +132,14 @@ func getSlowSpeedPeriods(ctx context.Context, req *mcp.CallToolRequest, input Ge
 	return nil, GetSlowPeriodsOutput{
 		Results: string(jsonSpeedResult),
 	}, nil
+}
+
+func isSlow(speed string, threshold float64) (bool, error) {
+	value, err := strconv.ParseFloat(speed, 64)
+	if err != nil {
+		return false, err
+	}
+	return value < threshold, nil
 }
 
 func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSlowestPeriodInput) (*mcp.CallToolResult, GetSlowestPeriodOutput, error) {
@@ -140,6 +161,10 @@ func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSl
 		}
 	}
 
+	if slowestSpeedResult == math.MaxFloat64 {
+		return nil, GetSlowestPeriodOutput{}, fmt.Errorf("no valid speedtest result found")
+	}
+
 	jsonResult, err := json.Marshal([]SpeedTestResult{slowestResult})
 	if err != nil {
 		return nil, GetSlowestPeriodOutput{}, err
@@ -150,12 +175,15 @@ func getSlowestPeriod(ctx context.Context, req *mcp.CallToolRequest, input GetSl
 }
 
 func getResultsByDate(ctx context.Context, req *mcp.CallToolRequest, input GetResultByDateInput) (*mcp.CallToolResult, GetResultByDateOutput, error) {
+	if _, err := time.Parse("2006-01-02", input.Date); err != nil {
+		return nil, GetResultByDateOutput{}, fmt.Errorf("invalid date %q: use YYYY-MM-DD", input.Date)
+	}
 	results, err := fetchAllResults(url)
 	if err != nil {
 		return nil, GetResultByDateOutput{}, err
 	}
 
-	var resultsByDate []SpeedTestResult
+	resultsByDate := []SpeedTestResult{}
 	for _, result := range results {
 		if result.TimeStamp.Format("2006-01-02") == input.Date {
 			resultsByDate = append(resultsByDate, result)
@@ -228,9 +256,7 @@ func getResultsByDuration(ctx context.Context, req *mcp.CallToolRequest, input G
 
 func main() {
 	// Create a server with a single tool.
-	log.Println("calling from main")
-	server := mcp.NewServer(&mcp.Implementation{Name: "greeter", Version: "1.0.0"}, nil)
-	log.Println("before calling the mcp.addtool")
+	server := mcp.NewServer(&mcp.Implementation{Name: "speedtest-mcp", Version: "1.0.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "getAllResults",
 		Description: "Returns all speedtest results including timestamp, download speed, upload speed, latency, ISP and peer. Use this when the user asks for averages, trends, comparisons, best/worst periods, or any question that requires analyzing the full dataset.",
@@ -245,12 +271,12 @@ func main() {
 	}, getSlowestPeriod)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "getResultsByDate",
-		Description: "Returns all speedtest results for a specific date. Use this when the user asks for results on a specific day, today's results, or yesterday's results. Requires date parameter in YYYY-MM-DD format.",
+		Description: "Returns all speedtest results for a specific date. Use this when the user asks for results on a specific day, today's results, or yesterday's results. Requires date parameter in YYYY-MM-DD format, in UTC.",
 	}, getResultsByDate)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "getResultsByDuration",
-		Description: "Returns speedtest results from the last N duration. Use when the user asks about recent results, current performance, or what happened in the last Xa hours/days. Accepts duration in formats: 30m, 2h, 1d, 2d, 1w. Requires duration parameter.",
+		Description: "Returns speedtest results from the last N duration. Use when the user asks about recent results, current performance, or what happened in the last few hours or days. Accepts duration in formats: 30m, 2h, 1d, 2d, 1w. Requires duration parameter.",
 	}, getResultsByDuration)
 
 	// Create the streamable HTTP handler.
@@ -259,6 +285,7 @@ func main() {
 	}, nil)
 
 	// Start the HTTP server.
+	log.Printf("speedtest-mcp listening on 0.0.0.0:8020, speedtest API at %s", url)
 	if err := http.ListenAndServe("0.0.0.0:8020", handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
